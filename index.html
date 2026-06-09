@@ -212,7 +212,11 @@ function suggestions(){const q=$('ths-q').value; const box=$('ths-suggestions');
 function add(id){const p=products.find(x=>x.id==id); const color=selectedColor(id); const imgIndex=selectedImgIndex(id); const key=id+'|'+color; const it=cart.find(x=>x.key===key); if(it)it.qty++; else cart.push({key,id,qty:1,color,imgIndex}); cartRender(); openCart();}
 function cartRender(){$('ths-count').textContent=cart.reduce((a,b)=>a+b.qty,0); $('ths-cart-items').innerHTML=cart.length?cart.map(it=>{const p=products.find(x=>x.id==it.id); return `<div class="ths-cart-item"><img src="${p.images&&p.images[it.imgIndex]?p.images[it.imgIndex]:img(p)}"><div><b>${p.name}</b><br><small>${p.category}${it.color?' • Cor: '+it.color:''} • un.: ${brl(unit(p))}</small><div class="ths-qty"><button data-qty="${it.key}" data-d="-1">−</button><span>${it.qty}</span><button data-qty="${it.key}" data-d="1">+</button></div></div><b>${brl(unit(p)*it.qty)}</b><button class="ths-remove" data-remove="${it.key}">Remover produto</button></div>`}).join(''):'<div class="ths-card"><div class="ths-body">Carrinho vazio.</div></div>'; const sub=cart.reduce((s,it)=>s+normal(products.find(p=>p.id==it.id))*it.qty,0); const total=cart.reduce((s,it)=>s+unit(products.find(p=>p.id==it.id))*it.qty,0); $('ths-sub').textContent=brl(sub); const labels={pix:'Pix',debito:'Débito / valor normal',credito:'Cartão de crédito',mercadopago:'Mercado Pago / valor normal'}; $('ths-paylabel').textContent=labels[pay];
 $('ths-installments').style.display=pay==='credito'?'block':'none';
-if($('ths-send')) $('ths-send').textContent = pay==='mercadopago' ? 'Pagar com Mercado Pago' : 'Finalizar no WhatsApp';
+if($('ths-send')){
+  $('ths-send').textContent = pay==='mercadopago' ? 'Pagar com Mercado Pago' : 'Finalizar no WhatsApp';
+  $('ths-send').classList.toggle('ths-mp-finish', pay==='mercadopago');
+}
+if(document.getElementById('ths-store')) document.getElementById('ths-store').classList.toggle('ths-mp-selected', pay==='mercadopago');
 if(pay==='credito'){
 const sel=$('ths-installments');
 const current=String(installments||'');
@@ -1354,6 +1358,73 @@ body.ths-checkout-open #ths-store #ths-top-return{
       ev.preventDefault();
       ev.stopPropagation();
       updateDeliveryCard();
+
+      var payAtivo=document.querySelector('#ths-store .ths-pay.active');
+      var formaAtual=payAtivo&&payAtivo.dataset?String(payAtivo.dataset.pay||''):'';
+      var textoBotao=String((sendBtn&&sendBtn.textContent)||'').toLowerCase();
+      var textoCondicao=String(((document.getElementById('ths-paylabel')||{}).textContent)||'').toLowerCase();
+      var mercadoSelecionado=(formaAtual==='mercadopago') || textoBotao.indexOf('mercado')>-1 || textoCondicao.indexOf('mercado')>-1;
+
+      if(mercadoSelecionado){
+        (async function(){
+          var textoOriginal=sendBtn.textContent;
+          try{
+            sendBtn.disabled=true;
+            sendBtn.textContent='Gerando pagamento seguro...';
+
+            function brlToNumber(txt){
+              var n=String(txt||'').replace(/[^0-9,.-]/g,'').replace(/\./g,'').replace(',','.');
+              n=parseFloat(n);
+              return isNaN(n)?0:n;
+            }
+
+            var totalTxt=(document.getElementById('ths-total')||{}).textContent||'';
+            var total=brlToNumber(totalTxt);
+            if(!total||total<=0){
+              alert('Não foi possível identificar o valor total do pedido.');
+              return;
+            }
+
+            var nomeCliente=(document.getElementById('ths-client')||{}).value||'Cliente';
+            var pedidoResumo=mensagemWhatsApp();
+
+            var resp=await fetch('/api/create-payment',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({
+                items:[{
+                  title:'Pedido THIAGO LOURENÇO MÓVEIS',
+                  quantity:1,
+                  unit_price:Number(total.toFixed(2))
+                }],
+                payer:{name:nomeCliente},
+                order:{
+                  resumo:pedidoResumo,
+                  total:totalTxt,
+                  forma:'Mercado Pago'
+                }
+              })
+            });
+
+            var data=await resp.json().catch(function(){return {};});
+            if(!resp.ok || !(data.init_point||data.sandbox_init_point)){
+              console.error('Mercado Pago:',data);
+              alert('Não foi possível gerar o pagamento no Mercado Pago. Confira as variáveis na Vercel e tente novamente.');
+              return;
+            }
+
+            window.location.href=data.sandbox_init_point||data.init_point;
+          }catch(err){
+            console.error('Erro Mercado Pago:',err);
+            alert('Erro ao conectar com o Mercado Pago. Tente novamente.');
+          }finally{
+            sendBtn.disabled=false;
+            sendBtn.textContent=textoOriginal||'Pagar com Mercado Pago';
+          }
+        })();
+        return;
+      }
+
       window.open('https://wa.me/'+numeroWhats()+'?text='+encodeURIComponent(mensagemWhatsApp()),'_blank');
       return;
     }
@@ -1385,4 +1456,45 @@ body.ths-checkout-open #ths-store #ths-top-return{
    Quando a rota segura /api/create-payment estiver publicada na Vercel,
    o botão de pagamento poderá chamar essa rota sem alterar o WhatsApp atual. */
 window.thsMercadoPagoReady = false;
+</script>
+
+<style id="ths-mercado-pago-botao-azul-final">
+#ths-store #ths-send.ths-mp-finish,
+#ths-store.ths-mp-selected #ths-send{
+  background:linear-gradient(135deg,#7dd3fc,#00b1ea)!important;
+  color:#ffffff!important;
+  box-shadow:0 12px 30px rgba(0,177,234,.30)!important;
+}
+#ths-store .ths-pay[data-pay="mercadopago"].active{
+  background:linear-gradient(135deg,#7dd3fc,#00b1ea)!important;
+  color:#ffffff!important;
+  border-color:rgba(125,211,252,.75)!important;
+}
+</style>
+<script id="ths-mercado-pago-botao-azul-sync-final">
+(function(){
+  function isMercadoPago(){
+    var active=document.querySelector('#ths-store .ths-pay.active');
+    var payLabel=document.getElementById('ths-paylabel');
+    var send=document.getElementById('ths-send');
+    var a=active&&active.dataset?String(active.dataset.pay||'').toLowerCase():'';
+    var l=String((payLabel&&payLabel.textContent)||'').toLowerCase();
+    var b=String((send&&send.textContent)||'').toLowerCase();
+    return a==='mercadopago'||l.indexOf('mercado')>-1||b.indexOf('mercado')>-1;
+  }
+  function sync(){
+    var store=document.getElementById('ths-store');
+    var send=document.getElementById('ths-send');
+    var mp=isMercadoPago();
+    if(store)store.classList.toggle('ths-mp-selected',mp);
+    if(send){
+      send.classList.toggle('ths-mp-finish',mp);
+      if(mp)send.textContent='Pagar com Mercado Pago';
+    }
+  }
+  document.addEventListener('click',function(){setTimeout(sync,30);setTimeout(sync,250);},true);
+  document.addEventListener('change',function(){setTimeout(sync,30);},true);
+  setInterval(sync,1000);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync); else sync();
+})();
 </script>
