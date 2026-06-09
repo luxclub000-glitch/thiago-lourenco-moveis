@@ -212,6 +212,7 @@ function suggestions(){const q=$('ths-q').value; const box=$('ths-suggestions');
 function add(id){const p=products.find(x=>x.id==id); const color=selectedColor(id); const imgIndex=selectedImgIndex(id); const key=id+'|'+color; const it=cart.find(x=>x.key===key); if(it)it.qty++; else cart.push({key,id,qty:1,color,imgIndex}); cartRender(); openCart();}
 function cartRender(){$('ths-count').textContent=cart.reduce((a,b)=>a+b.qty,0); $('ths-cart-items').innerHTML=cart.length?cart.map(it=>{const p=products.find(x=>x.id==it.id); return `<div class="ths-cart-item"><img src="${p.images&&p.images[it.imgIndex]?p.images[it.imgIndex]:img(p)}"><div><b>${p.name}</b><br><small>${p.category}${it.color?' • Cor: '+it.color:''} • un.: ${brl(unit(p))}</small><div class="ths-qty"><button data-qty="${it.key}" data-d="-1">−</button><span>${it.qty}</span><button data-qty="${it.key}" data-d="1">+</button></div></div><b>${brl(unit(p)*it.qty)}</b><button class="ths-remove" data-remove="${it.key}">Remover produto</button></div>`}).join(''):'<div class="ths-card"><div class="ths-body">Carrinho vazio.</div></div>'; const sub=cart.reduce((s,it)=>s+normal(products.find(p=>p.id==it.id))*it.qty,0); const total=cart.reduce((s,it)=>s+unit(products.find(p=>p.id==it.id))*it.qty,0); $('ths-sub').textContent=brl(sub); const labels={pix:'Pix',debito:'Débito / valor normal',credito:'Cartão de crédito',mercadopago:'Mercado Pago / valor normal'}; $('ths-paylabel').textContent=labels[pay];
 $('ths-installments').style.display=pay==='credito'?'block':'none';
+if($('ths-send')) $('ths-send').textContent = pay==='mercadopago' ? 'Pagar com Mercado Pago' : 'Finalizar no WhatsApp';
 if(pay==='credito'){
 const sel=$('ths-installments');
 const current=String(installments||'');
@@ -252,7 +253,7 @@ function nextDeliveryDate(city){const days=deliveryOptions(city);if(!days.length
 function formatDeliveryDate(d){if(!d)return '';return d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'})}
 function updateDeliveryEstimate(){const box=document.getElementById('ths-delivery-estimate');const citySelect=document.getElementById('ths-city');const city=citySelect?citySelect.value:'';if(!box)return '';const d=nextDeliveryDate(city);if(!d){box.classList.remove('is-ready');box.innerHTML='<div class="ths-delivery-icon">🚚</div><div><strong>Previsão de entrega</strong><span>Selecione a cidade e clique em gerar previsão.</span></div>';return ''}const txt='Entrega prevista: '+formatDeliveryDate(d);box.classList.add('is-ready');box.innerHTML='<div class="ths-delivery-icon">✅</div><div><strong>✅ '+txt+'</strong><span>Feriados não tem entrega; se cair em feriado, será no próximo dia útil.</span></div>';return '✅ '+txt}
 
-function send(){
+async function send(){
 if(!cart.length)return alert('Carrinho vazio.');
 
 const cliente = $('ths-client').value || 'cliente';
@@ -271,6 +272,62 @@ const limpaTexto = (valor)=>String(valor || '')
   .replace(/[\u0000-\u001F\u007F]/g,' ')
   .replace(/\s+/g,' ')
   .trim();
+
+if(pay==='mercadopago'){
+  try{
+    const btn = $('ths-send');
+    const originalText = btn ? btn.textContent : '';
+    if(btn){ btn.disabled = true; btn.textContent = 'Gerando pagamento seguro...'; }
+
+    const mpItems = cart.map((it)=>{
+      const p = products.find(x=>x.id==it.id);
+      const cor = it.color ? ` - Cor: ${limpaTexto(it.color)}` : '';
+      return {
+        title: limpaTexto((p && p.name ? p.name : 'Produto') + cor),
+        quantity: Number(it.qty || 1),
+        unit_price: Number(unit(p).toFixed(2))
+      };
+    });
+
+    const response = await fetch('/api/create-payment',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        items: mpItems,
+        payer:{ name: limpaTexto(cliente) },
+        order:{
+          cliente: limpaTexto(cliente),
+          cpf: limpaTexto(cpf),
+          telefone: limpaTexto(telefone),
+          cidade: limpaTexto(cidade),
+          bairro: limpaTexto(bairro),
+          endereco: limpaTexto(enderecoCompleto),
+          observacoes: limpaTexto(obs),
+          entrega: limpaTexto(entregaPrevista),
+          total: limpaTexto($('ths-total').textContent),
+          forma: 'Mercado Pago'
+        }
+      })
+    });
+
+    const data = await response.json().catch(()=>({}));
+    if(!response.ok || !(data.init_point || data.sandbox_init_point)){
+      console.error('Erro Mercado Pago:', data);
+      alert('Não foi possível gerar o pagamento no Mercado Pago. Verifique as variáveis de ambiente na Vercel e tente novamente.');
+      if(btn){ btn.disabled = false; btn.textContent = originalText || 'Pagar com Mercado Pago'; }
+      return;
+    }
+
+    window.location.href = data.sandbox_init_point || data.init_point;
+    return;
+  }catch(error){
+    console.error('Erro ao conectar Mercado Pago:', error);
+    alert('Erro ao conectar com o Mercado Pago. Tente novamente.');
+    const btn = $('ths-send');
+    if(btn){ btn.disabled = false; btn.textContent = 'Pagar com Mercado Pago'; }
+    return;
+  }
+}
 
 const itens = cart.map((it,idx)=>{
   const p = products.find(x=>x.id==it.id);
